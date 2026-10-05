@@ -1,0 +1,12 @@
+#!/bin/sh
+# 首次启动时执行：把主机名固定为 jolycqt373（界面 logo 位置显示的名字）
+# 采用 uci-defaults 更稳，不依赖上游 config_generate 的字符串是否改动
+
+uci -q batch <<-EOF
+	set system.@system[0].hostname='jolycqt373'
+	set system.@system[0].timezone='CST-8'
+	set system.@system[0].zonename='Asia/Shanghai'
+	commit system
+EOF
+
+exit 0
