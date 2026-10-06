@@ -1,75 +1,107 @@
-name: Build Redmi AX5 (jolycqt373)
+name: Build OpenWrt for Redmi AX5 (Argon + OpenWrt)
 
-# 手动点击运行，或每天北京时间 04:00 自动编译一次
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-  schedule:
-    - cron: '0 20 * * *'
+    inputs:
+      ssh:
+        description: '是否开启SSH连接'
+        required: false
+        default: 'false'
+      clean:
+        description: '清理之前的编译缓存'
+        required: false
+        default: 'true'
 
 env:
   REPO_URL: https://github.com/LiBwrt/LibWrt.git
   REPO_BRANCH: 25.12-nss
+  FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: configs/redmi_ax5.config
-  DIY_SCRIPT: diy-script.sh
+  DIY_SH: diy-script.sh
+  UPLOAD_FIRMWARE: true
+  UPLOAD_BIN_DIR: false
   TZ: Asia/Shanghai
 
 jobs:
-  Build:
+  build:
     runs-on: ubuntu-22.04
-
     steps:
-      - name: 释放磁盘空间
-        uses: easimon/maximize-build-space@master
-        with:
-          swap-size-mb: 1024
-          temp-reserve-mb: 100
-          root-reserve-mb: 1024
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: 拉取本仓库
-        uses: actions/checkout@main
+    - name: Free up disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo apt-get -y purge azure-cli ghc* zulu* hhvm llvm* firefox google-chrome* dotnet*
+        sudo apt-get -y autoremove --purge
+        sudo apt-get clean
+        df -h
 
-      - name: 克隆源码
-        run: |
-          git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
-          echo "OPENWRT_PATH=$PWD/openwrt" >> $GITHUB_ENV
+    - name: Clone source code
+      run: |
+        git clone --depth 1 -b $REPO_BRANCH $REPO_URL openwrt
+        cd openwrt
+        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
 
-      - name: 应用设备配置
-        run: |
-          cp $CONFIG_FILE openwrt/.config
-          cd openwrt
-          make defconfig
+    - name: Load custom feeds
+      run: |
+        cd openwrt
+        echo "src-git argon https://github.com/jerrykuku/luci-theme-argon.git" >> feeds.conf.default
+        echo "src-git argon_config https://github.com/jerrykuku/luci-app-argon-config.git" >> feeds.conf.default
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
-      - name: 更新并安装 feeds
-        run: |
-          cd openwrt
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+    - name: Load custom configuration
+      run: |
+        cd openwrt
+        [ -e files ] || mkdir files
+        cp -rf ../files/* files/
+        rm -f .config
+        cat ../$CONFIG_FILE >> .config
+        make defconfig
 
-      - name: 执行 jolycqt373 定制脚本
-        run: |
-          cd openwrt
-          bash $GITHUB_WORKSPACE/$DIY_SCRIPT
+    - name: DIY script
+      run: |
+        cd openwrt
+        chmod +x ../$DIY_SH
+        bash ../$DIY_SH
 
-      - name: 载入自定义文件（banner / 首次启动设置）
-        run: |
-          [ -e files ] && cp -rf files openwrt/
-          cd openwrt
-          make defconfig
+    - name: Download packages
+      run: |
+        cd openwrt
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
 
-      - name: 下载依赖包
-        run: |
-          cd openwrt
-          make download -j8
-          find dl -size -1024c -exec ls -l {} \;
-          find dl -size -1024c -exec rm -f {} \;
+    - name: Compile firmware
+      id: compile
+      run: |
+        cd openwrt
+        echo "开始编译, CPU核心数: $(nproc)"
+        make -j$(nproc) || make -j1 V=s
+        echo "编译完成"
 
-      - name: 编译固件
-        run: |
-          cd openwrt
-          make -j$(nproc) || make -j1 V=s
+    - name: Organize firmware files
+      run: |
+        cd openwrt/bin/targets/qualcommax/ipq60xx
+        rm -rf packages
+        rm -f *.sha256sums
+        for file in *; do
+          if [ -f "$file" ]; then
+            mv "$file" "openwrt-qualcommax-ipq60xx-redmi_ax5-${file}"
+          fi
+        done
+        sha256sum * > sha256sums.txt
+        cd -
+        mkdir -p firmware_output
+        cp -rf openwrt/bin/targets/qualcommax/ipq60xx/* firmware_output/
+        cp -rf openwrt/.config firmware_output/config.buildinfo
 
-      - name: 上传固件
-        uses: actions/upload-artifact@main
-        with:
-          name: redmi-ax5-jolycqt373
-          path: openwrt/bin/targets/qualcommax/ipq60xx/*
+    - name: Upload firmware
+      uses: actions/upload-artifact@v4
+      with:
+        name: redmi-ax5-openwrt-argon-with-nand-factory
+        path: firmware_output/*
