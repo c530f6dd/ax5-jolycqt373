@@ -6,12 +6,8 @@ on:
       - main
   workflow_dispatch:
     inputs:
-      ssh:
-        description: '是否开启SSH连接'
-        required: false
-        default: 'false'
       clean:
-        description: '清理之前的编译缓存'
+        description: '清理编译缓存'
         required: false
         default: 'true'
 
@@ -21,8 +17,6 @@ env:
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: configs/redmi_ax5.config
   DIY_SH: diy-script.sh
-  UPLOAD_FIRMWARE: true
-  UPLOAD_BIN_DIR: false
   TZ: Asia/Shanghai
 
 jobs:
@@ -34,17 +28,16 @@ jobs:
 
     - name: Free up disk space
       run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo apt-get -y purge azure-cli ghc* zulu* hhvm llvm* firefox google-chrome* dotnet*
-        sudo apt-get -y autoremove --purge
-        sudo apt-get clean
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+        sudo apt-get -y purge azure-cli ghc* zulu* hhvm llvm* firefox google-chrome* dotnet* || true
+        sudo apt-get -y autoremove --purge || true
+        sudo apt-get clean || true
         df -h
 
     - name: Clone source code
       run: |
         git clone --depth 1 -b $REPO_BRANCH $REPO_URL openwrt
-        cd openwrt
-        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+        echo "OPENWRT_PATH=$GITHUB_WORKSPACE/openwrt" >> $GITHUB_ENV
 
     - name: Load custom feeds
       run: |
@@ -72,12 +65,11 @@ jobs:
     - name: Download packages
       run: |
         cd openwrt
-        make download -j8
+        make download -j8 || true
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
     - name: Compile firmware
-      id: compile
       run: |
         cd openwrt
         echo "开始编译, CPU核心数: $(nproc)"
@@ -86,22 +78,20 @@ jobs:
 
     - name: Organize firmware files
       run: |
+        mkdir -p $GITHUB_WORKSPACE/firmware_output
         cd openwrt/bin/targets/qualcommax/ipq60xx
         rm -rf packages
-        rm -f *.sha256sums
-        for file in *; do
-          if [ -f "$file" ]; then
-            mv "$file" "openwrt-qualcommax-ipq60xx-redmi_ax5-${file}"
-          fi
-        done
+        echo "=== 原始产物 ==="
+        ls -lh
+        find . -maxdepth 1 -type f -exec cp -v {} $GITHUB_WORKSPACE/firmware_output/ \;
+        cp $GITHUB_WORKSPACE/openwrt/.config $GITHUB_WORKSPACE/firmware_output/config.buildinfo
+        cd $GITHUB_WORKSPACE/firmware_output
         sha256sum * > sha256sums.txt
-        cd -
-        mkdir -p firmware_output
-        cp -rf openwrt/bin/targets/qualcommax/ipq60xx/* firmware_output/
-        cp -rf openwrt/.config firmware_output/config.buildinfo
+        echo "=== 最终产物清单 ==="
+        ls -lh
 
     - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
-        name: redmi-ax5-openwrt-argon-with-nand-factory
+        name: redmi-ax5-openwrt-argon-nand-factory
         path: firmware_output/*
