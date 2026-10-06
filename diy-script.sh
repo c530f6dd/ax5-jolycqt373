@@ -1,39 +1,42 @@
 #!/bin/bash
-# 定制修改：主题、主机名、IP、时区、默认设置 + 添加nand-factory.bin镜像
+# 定制脚本：主机名 OpenWrt、时区上海、默认 Argon 主题，并为红米AX5增加 squashfs-nand-factory.bin
+set -e
 
-# 修改默认IP为192.168.1.1
-sed -i 's/192.168.1.1/192.168.1.1/g' package/base-files/files/bin/config_generate
+CG="package/base-files/files/bin/config_generate"
 
-# 修改默认主机名为 OpenWrt
-sed -i "s/hostname='.*'/hostname='OpenWrt'/g" package/base-files/files/bin/config_generate
+# 1) 主机名统一改为 OpenWrt（源码默认是 LibWrt）
+sed -i "s/hostname='[^']*'/hostname='OpenWrt'/g" "$CG"
+# 2) 时区固定为上海（幂等，源码默认已是 CST-8，这里做双保险）
+sed -i "s/timezone='[^']*'/timezone='CST-8'/g" "$CG"
+sed -i "s|zonename='[^']*'|zonename='Asia/Shanghai'|g" "$CG"
 
-# 修改时区为上海
-sed -i "s/timezone='UTC'/timezone='CST-8'/g" package/base-files/files/bin/config_generate
-sed -i "/timezone='CST-8'/a \\\t\tset system.@system[-1].zonename='Asia/Shanghai'" package/base-files/files/bin/config_generate
+echo "=== config_generate 校验 ==="
+grep -n "hostname=\|timezone=\|zonename=" "$CG" | head
 
-# 设置默认主题为Argon
-mkdir -p files/etc/uci-defaults
-
-# === 为红米AX5添加 squashfs-nand-factory.bin 镜像生成 ===
+# 3) 为 redmi_ax5 增加 nand-factory.bin 镜像规则
+#    关键：必须插在设备定义块内部（endef 之前），否则规则不生效
 IPQ60XX_MK="target/linux/qualcommax/image/ipq60xx.mk"
-if [ -f "$IPQ60XX_MK" ]; then
-  echo "正在为 redmi_ax5 添加 nand-factory.bin 镜像生成规则..."
-  # 在DEVICE_PACKAGES行之后追加两行：IMAGES和IMAGE规则
-  # 使用 awk 精准定位到 redmi_ax5 的 DEVICE_PACKAGES 行后面插入
-  awk '
-  /^define Device\/redmi_ax5$/ { in_device=1 }
-  in_device && /^TARGET_DEVICES \+= redmi_ax5$/ {
-    # 插入两行在TARGET_DEVICES之前
+if [ ! -f "$IPQ60XX_MK" ]; then
+  echo "错误：未找到 $IPQ60XX_MK"
+  exit 1
+fi
+
+awk '
+/^define Device\/redmi_ax5$/ { in_dev=1 }
+in_dev && /^endef$/ {
     print "\tIMAGES += nand-factory.bin"
     print "\tIMAGE/nand-factory.bin := append-ubi | qsdk-ipq-factory-nand"
-    print $0
-    in_device=0
-    next
-  }
-  { print }
-  ' "$IPQ60XX_MK" > "$IPQ60XX_MK.tmp" && mv "$IPQ60XX_MK.tmp" "$IPQ60XX_MK"
-  echo "已成功添加 nand-factory.bin 镜像生成规则"
-  grep -A 2 "IMAGES += nand-factory" "$IPQ60XX_MK" || echo "警告: 规则添加可能失败，请检查"
-else
-  echo "警告: 未找到 $IPQ60XX_MK 文件，跳过nand-factory.bin添加"
-fi
+    in_dev=0
+}
+{ print }
+' "$IPQ60XX_MK" > "$IPQ60XX_MK.tmp" && mv "$IPQ60XX_MK.tmp" "$IPQ60XX_MK"
+
+echo "=== ipq60xx.mk 插桩结果 ==="
+sed -n '/define Device\/redmi_ax5$/,/TARGET_DEVICES += redmi_ax5/p' "$IPQ60XX_MK"
+
+grep -q "IMAGE/nand-factory.bin := append-ubi | qsdk-ipq-factory-nand" "$IPQ60XX_MK" || {
+  echo "错误：nand-factory 规则插入失败"
+  exit 1
+}
+
+echo "diy-script 执行完成"
