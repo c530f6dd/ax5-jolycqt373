@@ -1,0 +1,12 @@
+#!/bin/sh
+# 首次启动强制设置默认值
+uci set system.@system[0].hostname='OpenWrt'
+uci set system.@system[0].timezone='CST-8'
+uci set system.@system[0].zonename='Asia/Shanghai'
+uci set luci.main.mediaurlbase='/luci-static/argon'
+uci commit system
+uci commit luci
+
+# 设置默认root密码为password
+(echo password; echo password) | passwd root
+exit 0
